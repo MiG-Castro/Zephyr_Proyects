@@ -1,3 +1,27 @@
+/*
+Hecho por MC. Miguel! - 2025
+Implementacion de servidor BLE. Lee datos del BNO (I2C) -> Transmite por BLE.
+
+1. Muestreo del Sensor 
+   - Temporizador del kernel a 60 Hz. 
+   - La lectura se delega a una cola de trabajo (work queue) dedicada.
+2. Empaquetado de Datos
+   - Agrupa dos muestras consecutivas del acelerómetro + número de secuencia en un único paquete de datos.
+3. Transmisión BLE
+   - Anuncia el dispositivo como un periférico BLE conectable.
+   - Una vez que un dispositivo central se conecta, los paquetes de datos se envían mediante notificaciones GATT.
+   - El inicio y stop del muestreo y envió se controlan de forma remota escribiendo un comando en la característica Exercise Detection.
+     - 0xAA = Inicio.
+     - 0xFF = Stop.
+4. Sincronización y Concurrencia
+   - Usa un semáforo para notificar al hilo de envío de BLE cuándo hay un nuevo paquete listo.
+   - Mutex para proteger el búfer de datos compartido contra accesos concurrentes.
+5. Gestión y Feedback
+   - Gestiona los parámetros de la conexión BLE (PHY, longitud de datos, MTU).
+   - LED's parpadeando en verde = Esperando conexión a central
+   - LED's parpadeando en azul = Conectado a central
+*/
+
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -108,9 +132,9 @@ static ble_packet_t latest_ble_packet;	// Unico buffer
 static struct k_mutex packet_mutex;		// Mutex
 static struct k_sem ble_data_sem;		// Semaforo
 
-// NUEVAS DECLARACIONES
-K_KERNEL_STACK_MEMBER(sensor_work_q_stack, GETSAMPLE_STACKSIZE); // Stack para la work queue
-K_KERNEL_STACK_MEMBER(send_thread_stack, SEND_STACKSIZE);       // Stack para el hilo de envío
+// DECLARACIONES PARA HILOS TOMA DE MUESTRAS Y ENVIO
+K_KERNEL_STACK_MEMBER(sensor_work_q_stack, GETSAMPLE_STACKSIZE);
+K_KERNEL_STACK_MEMBER(send_thread_stack, SEND_STACKSIZE);
 
 static struct k_thread send_thread_data; // Estructura de datos del hilo
 k_tid_t send_thread_tid;                 // ID del hilo
@@ -523,5 +547,3 @@ int main(void)
 		}
 	}
 }
-
-// K_THREAD_DEFINE(send_data_thread_id, SEND_STACKSIZE, send_data_thread, NULL, NULL, NULL, SEND_PRIORITY, 0, 0);

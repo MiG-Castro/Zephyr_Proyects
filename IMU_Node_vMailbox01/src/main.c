@@ -1,3 +1,29 @@
+/*
+Hecho por MC. Miguel! - 2025
+Implementacion de servidor BLE. Lee datos del BNO (I2C) -> Transmite por BLE.
+ENVIA UN PAQUETE CON NO.SEC + QUAT + ACC + GYR + QUAT + ACC + GYR
+
+1. Muestreo del Sensor 
+   - Temporizador del kernel a 60 Hz. 
+   - La lectura se delega a una cola de trabajo (work queue) dedicada.
+2. Empaquetado de Datos
+   - Agrupa dos muestras consecutivas CUATERNION + ACC + GYR + número de secuencia en un único paquete de datos.
+3. Transmisión BLE
+   - Anuncia el dispositivo como un periférico BLE conectable.
+   - Una vez que un dispositivo central se conecta, los paquetes de datos se envían mediante notificaciones GATT.
+   - El inicio y stop del muestreo y envió se controlan de forma remota escribiendo un comando en la característica Exercise Detection.
+     - 0xAA = Inicio.
+     - 0xFF = Stop.
+4. Sincronización y Concurrencia
+   - Usa un semáforo para notificar al hilo de envío de BLE cuándo hay un nuevo paquete listo.
+   - Mutex para proteger el búfer de datos compartido contra accesos concurrentes.
+5. Gestión y Feedback
+   - Gestiona los parámetros de la conexión BLE (PHY, longitud de datos, MTU).
+   - LED rojo encendido = inicializaciones en proceso
+   - LED's parpadeando en verde = Esperando conexión a central
+   - LED's parpadeando en azul = Conectado a central
+*/
+
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -72,24 +98,17 @@ static struct k_work adv_work;
 
 #define SAMPLING_RATE_HZ 60
 #define SAMPLING_PERIOD_US (1000000 / SAMPLING_RATE_HZ)
+#define START_DELAY_MS 8000	// Delay before starting the sampling
 
 #define I2C_NODE DT_NODELABEL(i2c1)
 static const struct device *i2c1_dev = DEVICE_DT_GET(I2C_NODE);
-uint8_t units; // Store the unit configuration of BNO
+static uint8_t units; // Store the unit configuration of BNO
 
 // Estructura para muestra -> paquete a transmitir
-typedef struct {
-    int16_t x;
-    int16_t y;
-    int16_t z;
-} sensor_sample_t;
-
-typedef struct {
-	uint32_t packet_num; 
-    sensor_sample_t sample1;
-    sensor_sample_t sample2;
-} ble_packet_t;
-
+// Total bytes for 2 x (A + G + M + Q) + NoPkt = 56
+// Total bytes for 2 x (A + G + Q) + NoPkt =     44
+# define PACKET_SIZE 44
+static uint8_t last_packet[PACKET_SIZE];	// Unico buffer
 static uint32_t packet_counter = 0;
 static bool first_sample_taken = false;
 static bool start_send = false;
@@ -104,7 +123,6 @@ static struct k_work_q sensor_work_q;
 static struct k_work sensor_work;
 
 // 3. Mailbox
-static ble_packet_t latest_ble_packet;	// Unico buffer
 static struct k_mutex packet_mutex;		// Mutex
 static struct k_sem ble_data_sem;		// Semaforo
 
@@ -124,39 +142,27 @@ static void sensor_work_handler(struct k_work *work)
 	if (!start_send) {
 		return;
 	}
-
-	static ble_packet_t packet_in_progress;
-	uint8_t raw_accel_data[6];
-
-	// Leer los datos crudos del acelerómetro (6 bytes)
-	if (!bno055_read_raw_sensor_data(acc, 6, raw_accel_data, 0)) {
-		LOG_ERR("Failed to read sensor data");
-		return;
-	}
-	
-	// El BNO055 devuelve los datos en formato Little Endian (LSB, MSB)
-	int16_t ax = (int16_t)((raw_accel_data[1] << 8) | raw_accel_data[0]);
-	int16_t ay = (int16_t)((raw_accel_data[3] << 8) | raw_accel_data[2]);
-	int16_t az = (int16_t)((raw_accel_data[5] << 8) | raw_accel_data[4]);
+	static uint8_t packet_in_progress[PACKET_SIZE];
 
 	if (!first_sample_taken) {
-		// Es la primera muestra -> la guardamos
-		packet_in_progress.sample1.x = ax;
-		packet_in_progress.sample1.y = ay;
-		packet_in_progress.sample1.z = az;
+		// Primera muestra
+		// Guardamos el numero de paquete
+		memcpy(packet_in_progress, &packet_counter, sizeof(packet_counter));
+		// Guardamos datos quat + acc + gyr
+		bno055_read_raw_sensor_data(quat, 8, packet_in_progress, 4);
+		bno055_read_raw_sensor_data(acc, 12, packet_in_progress, 12);
+
 		first_sample_taken = true;
 	} else {
-		// Es la segunda muestra -> completamos el paquete y lo enviamos a la cola
-		packet_in_progress.sample2.x = ax;
-		packet_in_progress.sample2.y = ay;
-		packet_in_progress.sample2.z = az;
-		packet_in_progress.packet_num = packet_counter;
+		// Segunda muestra
+		bno055_read_raw_sensor_data(quat, 8, packet_in_progress, 24);
+		bno055_read_raw_sensor_data(acc, 12, packet_in_progress, 32);
 		
 		// LÓGICA DEL MAILBOX
 		// Bloquear el mutex para acceder de forma segura al mailbox
 		k_mutex_lock(&packet_mutex, K_FOREVER);
 		// Sobrescribir el mailbox con el paquete más reciente
-		latest_ble_packet = packet_in_progress;
+		memcpy(last_packet, &packet_in_progress, sizeof(packet_in_progress));
 		// Desbloquear el mutex
 		k_mutex_unlock(&packet_mutex);
 		// Señalizar al hilo BLE que hay nuevos datos listos
@@ -182,7 +188,7 @@ void send_data_thread(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
-    ble_packet_t packet_to_send;
+    uint8_t packet_to_send[PACKET_SIZE];
 
     while (1) {
         // 1. Esperar a la señal del semaforo. El hilo dormirá aquí sin consumir CPU.
@@ -191,13 +197,13 @@ void send_data_thread(void *p1, void *p2, void *p3)
         // 2. Una vez despierto, copiar el paquete más reciente del mailbox a un búfer local.
         //    Mutex para garantizar la integridad de los datos.
         k_mutex_lock(&packet_mutex, K_FOREVER);
-        packet_to_send = latest_ble_packet;
+		memcpy(packet_to_send, &last_packet, sizeof(last_packet));
         k_mutex_unlock(&packet_mutex);
 
         // 3. Si estamos conectados, suscritos y recibimos el comando
 		// if (connect && get_imus_sensordata_notify_enabled()) { //  && start_send
         if (get_imus_sensordata_notify_enabled() && start_send) {
-            my_imus_sensordata_notify((uint8_t *)&packet_to_send, sizeof(packet_to_send));
+            my_imus_sensordata_notify(packet_to_send, sizeof(packet_to_send));
         }
     }
 }
@@ -395,7 +401,7 @@ static void app_exercise_detec_cb(const uint8_t *buf, uint16_t len)
 			packet_counter = 0;
 			first_sample_taken = false;
 			k_sem_take(&ble_data_sem, K_NO_WAIT); 
-			k_timer_start(&sensor_timer, K_MSEC(1000), K_USEC(SAMPLING_PERIOD_US));
+			k_timer_start(&sensor_timer, K_MSEC(START_DELAY_MS), K_USEC(SAMPLING_PERIOD_US));
 		}
 
 		// Detener muestreo
@@ -424,7 +430,7 @@ int main(void)
 	gpio_pin_configure_dt(&red_led, GPIO_OUTPUT_ACTIVE);
 	gpio_pin_configure_dt(&grn_led, GPIO_OUTPUT_ACTIVE);
 	gpio_pin_configure_dt(&blu_led, GPIO_OUTPUT_ACTIVE);
-	gpio_pin_set_dt(&red_led, 0);
+	gpio_pin_set_dt(&red_led, 1);
 	gpio_pin_set_dt(&grn_led, 0);
 	gpio_pin_set_dt(&blu_led, 0);
 
@@ -512,6 +518,7 @@ int main(void)
 	//================================================================================
 	//                                LED Blink
 	//================================================================================
+	gpio_pin_set_dt(&red_led, 0);
 	for (;;) {
 		k_msleep(2000);
 		if (connect) {

@@ -62,7 +62,7 @@ extern "C" {
 #define temp    BNO_REG_TEMP
 
 // Page 1
-#define BNO_PAGE_1          0x01
+#define BNO_PAGE_1         0x01
 #define BNO_REG_ACC_CONF	0x08	// Acc Configuration, Default 0x38 [00111000]=4G,62.5Hz,NM
 #define BNO_REG_GYR_CONF_0	0x0A	// Gyr Configuration, Default 0x38 [00111000]
 #define BNO_REG_GYR_CONF_1	0x0B	// Gyr Configuration, Default 0x00 [00000000]=2000dps,32Hz,NM
