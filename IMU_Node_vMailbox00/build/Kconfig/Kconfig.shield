@@ -1,0 +1,2 @@
+osource "c:/ncs/proyectos/personales/a_repositorio_nodoimu/imu_node_vmailbox00/boards/shields/*/Kconfig.shield"
+osource "C:/ncs/v3.0.1/nrf/boards/shields/*/Kconfig.shield"

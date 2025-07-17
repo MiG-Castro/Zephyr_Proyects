@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "my_imu_ble_service.h": "c"
+    },
+    "nrf-connect.applications": []
+}

@@ -1,0 +1,18 @@
+{
+  "toolchainPath": "c:\\ncs\\toolchains\\0b393f9e1b",
+  "sdkPath": "c:\\ncs\\v3.0.1",
+  "board": "xiao_ble/nrf52840/sense",
+  "boardDir": "c:\\ncs\\v3.0.1\\zephyr\\boards\\seeed\\xiao_ble",
+  "boardDirs": [
+    "c:\\ncs\\v3.0.1\\zephyr\\boards\\seeed\\xiao_ble"
+  ],
+  "sysbuild": false,
+  "optimizations": "none",
+  "cmakeArgs": [],
+  "confFiles": [],
+  "buildDirectory": "build",
+  "kconfigFragments": [],
+  "snippets": [],
+  "dtcOverlays": [],
+  "extraDtcOverlays": []
+}

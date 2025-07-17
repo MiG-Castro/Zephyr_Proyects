@@ -1,0 +1,6 @@
+west:
+  command: C:\ncs\toolchains\0b393f9e1b\opt\bin\Scripts\west build --build-dir c:/ncs/Proyectos/Personales/A_Repositorio_NodoIMU/IMU_Node_v0/build
+    c:/ncs/Proyectos/Personales/A_Repositorio_NodoIMU/IMU_Node_v0 --pristine --board
+    xiao_ble/nrf52840/sense --no-sysbuild -- -DBOARD_ROOT=c:/ncs/proyectos/personales/a_repositorio_nodoimu/imu_node_v0
+  topdir: c:\ncs\v3.0.1
+  version: 1.2.0
